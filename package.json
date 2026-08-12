@@ -1,0 +1,19 @@
+{
+  "name": "x-post-saver",
+  "version": "1.0.0",
+  "description": "Chrome extension to save X (Twitter) posts to a backend API",
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "tsc && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "fast-check": "^3.19.0",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11",
+    "vitest": "^1.6.0"
+  }
+}

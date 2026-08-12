@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>X Post Saver Options</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div id="app">
+    <h1>X Post Saver Options</h1>
+    <p class="description">Configure your backend API settings to save posts, or leave empty to use clipboard mode.</p>
+    
+    <form id="options-form">
+      <!-- API URL Field -->
+      <div class="form-group">
+        <label for="api-url">API URL <span class="optional">(optional - leave empty for clipboard mode)</span></label>
+        <input 
+          type="url" 
+          id="api-url" 
+          name="apiUrl" 
+          placeholder="https://your-api.example.com/save"
+        >
+        <span id="api-url-error" class="error-text hidden"></span>
+        <span class="hint">Leave empty to copy posts to clipboard as Markdown</span>
+      </div>
+      
+      <!-- API Key Field -->
+      <div class="form-group">
+        <label for="api-key">API Key <span class="optional">(optional)</span></label>
+        <input
+          type="password"
+          id="api-key"
+          name="apiKey"
+          placeholder="Enter your API key"
+        >
+        <span class="hint">Used for Bearer token authentication</span>
+      </div>
+
+      <!-- Obsidian Toggle -->
+      <div class="form-group">
+        <label class="checkbox-label">
+          <input type="checkbox" id="enable-obsidian" name="enableObsidian">
+          保存到本地 Obsidian（需先启动本地服务）
+        </label>
+        <span class="hint">开启后点击扩展图标会自动把内容保存到本地 Obsidian 服务</span>
+      </div>
+
+      <!-- Obsidian Base URL Field -->
+      <div class="form-group">
+        <label for="obsidian-base-url">本地服务地址 <span class="optional">(optional)</span></label>
+        <input
+          type="url"
+          id="obsidian-base-url"
+          name="obsidianBaseUrl"
+          placeholder="http://127.0.0.1:18787"
+        >
+        <span id="obsidian-base-url-error" class="error-text hidden"></span>
+        <span class="hint">本地 x-likes-to-obsidian 服务地址</span>
+      </div>
+
+      <!-- Save Button -->
+      <div class="form-actions">
+        <button type="submit" id="save-button" class="save-btn">Save Settings</button>
+      </div>
+      
+      <!-- Status Message Area -->
+      <div id="status-message" class="status-message hidden"></div>
+    </form>
+  </div>
+  <script type="module" src="options.ts"></script>
+</body>
+</html>

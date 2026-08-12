@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>X Post Saver</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="app">
+    <h1>X Post Saver</h1>
+    
+    <!-- Status Indicator -->
+    <div id="status-section" class="section">
+      <div id="status-indicator" class="status">
+        <span id="status-icon" class="status-icon"></span>
+        <span id="status-text">Checking page...</span>
+      </div>
+    </div>
+    
+    <!-- Preview Section -->
+    <div id="preview-section" class="section hidden">
+      <div class="preview-header">Content Preview</div>
+      <div id="preview-content" class="preview">
+        <div id="preview-title" class="preview-title hidden"></div>
+        <img id="cover-preview" class="cover-image hidden" alt="Article cover preview" />
+        <div id="author-info" class="author">
+          <span id="author-name" class="author-name"></span>
+          <span id="author-handle" class="author-handle"></span>
+        </div>
+        <div id="timestamp-text" class="timestamp hidden"></div>
+        <div id="content-preview" class="content-text"></div>
+      </div>
+    </div>
+    
+    <!-- Save Button -->
+    <div id="action-section" class="section">
+      <div class="action-buttons">
+        <button id="save-button" class="save-btn" disabled>保存到后端</button>
+        <button id="local-save-button" class="save-btn secondary" disabled>保存到本地</button>
+      </div>
+    </div>
+    
+    <!-- Result Message Area -->
+    <div id="result-section" class="section hidden">
+      <div id="result-message" class="result"></div>
+    </div>
+  </div>
+  <script type="module" src="popup.ts"></script>
+</body>
+</html>
