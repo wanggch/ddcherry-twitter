@@ -9,13 +9,10 @@ import { detectContentType, isArticlePage, isPostDetailPage } from '../common/ur
 import { extractPostData, extractPostDataWithDetails } from './postExtractor';
 import { extractArticleData, extractArticleDataWithDetails } from './articleExtractor';
 import { formatErrorMessage } from '../common/errors';
+import { hasArticleDom } from './pageDom';
 
 function isArticleDomPresent(): boolean {
-  return (
-    document.querySelector('[data-testid="longformRichTextComponent"]') !== null ||
-    document.querySelector('[data-testid="twitterArticleReadView"]') !== null ||
-    document.querySelector('[data-testid="twitterArticleRichTextView"]') !== null
-  );
+  return hasArticleDom(document);
 }
 
 /**

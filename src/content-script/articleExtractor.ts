@@ -1,119 +1,60 @@
 /**
  * Article Extractor module for X Post Saver
  * Extracts long-form article data from X/Twitter article pages
+ * and from articles embedded in status pages (including the 2026 X redesign).
  */
 
 import {
   ArticleData,
-  AuthorData,
   ExtractionResult,
   ErrorCode,
 } from '../common/types';
-import { extractArticleId, isArticlePage } from '../common/urlParser';
+import { extractArticleId, extractPostId, isArticlePage } from '../common/urlParser';
 import { createError, formatMissingFieldsMessage } from '../common/errors';
+import {
+  type ExtractionContext,
+  resolveDocument,
+  resolveUrl,
+  findArticleRoot,
+  findArticleIdInDom,
+  hasArticleDom,
+  extractAuthorFromContainer,
+  extractTimestampFromContainer,
+  serializeInline,
+  isAvatarOrDecorativeImage,
+} from './pageDom';
 
 const ARTICLE_SELECTORS = {
-  containers: [
-    '[data-testid="longformRichTextComponent"]',
-    '[data-testid="twitterArticleRichTextView"]',
-    '[data-testid="twitterArticleReadView"]',
-    '[data-testid="article-content"]',
-    'article',
-  ],
   title: '[data-testid="article-title"], [data-testid="twitter-article-title"], h1',
-  coverImage: '[data-testid="article-cover"] img',
-  timestamp: 'time[datetime]',
+  coverImage: '[data-testid="article-cover"] img, img[alt="Article cover image"]',
 };
 
-function findArticleContainer(): Element | null {
-  for (const selector of ARTICLE_SELECTORS.containers) {
-    const el = document.querySelector(selector);
-    if (el) {
-      return el as Element;
-    }
-  }
-  return null;
-}
-
-function findArticleIdFromDom(): string | null {
-  const links = Array.from(document.querySelectorAll('a[href*="/article/"]')) as HTMLAnchorElement[];
-  for (const link of links) {
-    const href = link.getAttribute('href') || '';
-    const match = href.match(/\/article\/(\d+)/);
-    if (match) {
-      return match[1];
-    }
-  }
-
-  const ogUrl = document.querySelector('meta[property="og:url"]');
-  const ogHref = ogUrl?.getAttribute('content') || '';
-  const ogMatch = ogHref.match(/\/article\/(\d+)/);
-  if (ogMatch) {
-    return ogMatch[1];
-  }
-
-  return null;
-}
-
-function extractTitle(root: ParentNode): string {
+function extractTitle(root: ParentNode, doc: Document): string {
   const titleElement = root.querySelector(ARTICLE_SELECTORS.title);
   if (titleElement?.textContent) {
     return titleElement.textContent.trim();
   }
 
-  const docTitle = document.querySelector('title');
-  if (docTitle?.textContent) {
-    return docTitle.textContent.trim();
-  }
-
-  const ogTitle = document.querySelector('meta[property="og:title"]');
-  if (ogTitle) {
-    return ogTitle.getAttribute('content')?.trim() ?? '';
-  }
-
-  return '';
-}
-
-function serializeNode(node: Node): string {
-  if (node.nodeType === Node.TEXT_NODE) {
-    return node.textContent ?? '';
-  }
-
-  if (node.nodeType === Node.ELEMENT_NODE) {
-    const el = node as HTMLElement;
-    const children = Array.from(el.childNodes)
-      .map(serializeNode)
-      .join('');
-
-    switch (el.tagName) {
-      case 'A': {
-        const href = (el as HTMLAnchorElement).href;
-        const text = children || href;
-        return href ? `[${text}](${href})` : text;
-      }
-      case 'STRONG':
-      case 'B':
-        return children ? `**${children}**` : children;
-      case 'EM':
-      case 'I':
-        return children ? `*${children}*` : children;
-      case 'BR':
-        return '\n';
-      default:
-        return children;
-    }
+  const ogDescription = doc.querySelector('meta[property="og:description"]');
+  const description = ogDescription?.getAttribute('content')?.trim() ?? '';
+  if (description && !/^https?:\/\//.test(description)) {
+    return description;
   }
 
   return '';
 }
 
 function extractContent(container: Element): string {
+  const articleBody = container.matches('.x-article-body')
+    ? container
+    : container.querySelector('.x-article-body');
+
   const richText =
     container.matches('[data-testid="longformRichTextComponent"]')
       ? container
       : container.querySelector('[data-testid="longformRichTextComponent"]');
 
-  const root = richText ?? container;
+  const root = articleBody ?? richText ?? container;
 
   const blockNodes = Array.from(root.querySelectorAll('[data-block="true"]'));
   if (blockNodes.length > 0) {
@@ -142,7 +83,7 @@ function extractContent(container: Element): string {
       } else {
         const bgDiv = block.querySelector('[data-testid="tweetPhoto"] div[style*="background-image"]') as HTMLElement | null;
         const style = bgDiv?.getAttribute('style') || '';
-        const match = style.match(/url\\(["']?(.*?)["']?\\)/);
+        const match = style.match(/url\(["']?(.*?)["']?\)/);
         if (match && match[1]) {
           urls.push(match[1]);
         }
@@ -151,10 +92,9 @@ function extractContent(container: Element): string {
     };
 
     for (const block of blockNodes) {
-      const text = serializeNode(block).trim();
+      const text = serializeInline(block).trim();
       const imageUrls = extractImagesFromBlock(block);
 
-      // Emit images before text if present in this block
       if (imageUrls.length > 0) {
         for (const url of imageUrls) {
           parts.push(`![image](${url})`);
@@ -169,7 +109,6 @@ function extractContent(container: Element): string {
       const isBlockquote = !!block.closest('blockquote.longform-blockquote');
 
       if (isBlockquote && !inBlockquote) {
-        // Start code block
         if (parts.length && parts[parts.length - 1] !== '') {
           parts.push('');
         }
@@ -178,7 +117,6 @@ function extractContent(container: Element): string {
       }
 
       if (!isBlockquote && inBlockquote) {
-        // Close code block before returning to normal paragraphs
         parts.push('```');
         inBlockquote = false;
         if (parts.length && parts[parts.length - 1] !== '') {
@@ -190,7 +128,6 @@ function extractContent(container: Element): string {
       parts.push(`${listPrefix}${text}`);
 
       if (!isBlockquote) {
-        // Add paragraph spacing between non-quote blocks
         parts.push('');
       }
     }
@@ -199,7 +136,6 @@ function extractContent(container: Element): string {
       parts.push('```');
     }
 
-    // Trim trailing empty lines
     while (parts.length > 0 && parts[parts.length - 1] === '') {
       parts.pop();
     }
@@ -212,7 +148,7 @@ function extractContent(container: Element): string {
   const paragraphs = Array.from(root.querySelectorAll('p'));
   if (paragraphs.length > 0) {
     const lines = paragraphs
-      .map((p) => serializeNode(p).trim())
+      .map((p) => serializeInline(p).trim())
       .filter((text) => text.length > 0);
 
     if (lines.length > 0) {
@@ -220,8 +156,7 @@ function extractContent(container: Element): string {
     }
   }
 
-  const text = root.textContent?.trim() ?? '';
-  return text;
+  return (root.textContent?.trim() ?? '');
 }
 
 function normalizeImageUrl(url: string): string {
@@ -237,15 +172,14 @@ function extractBackgroundImageUrl(element: Element | null): string | undefined 
     (element as HTMLElement).style.backgroundImage ||
     element.getAttribute('style') ||
     '';
-  const match = style.match(/url\\(["']?(.*?)["']?\\)/i);
+  const match = style.match(/url\(["']?(.*?)["']?\)/i);
   if (match && match[1]) {
     return normalizeImageUrl(match[1]);
   }
   return undefined;
 }
 
-function extractCoverImage(container?: Element): string | undefined {
-  const root: ParentNode = container ?? document;
+function extractCoverImage(container: Element, doc: Document): string | undefined {
   const imgSelectors = [
     ARTICLE_SELECTORS.coverImage,
     'a[href*="/article/"][href*="/media/"] [data-testid="tweetPhoto"] img',
@@ -253,7 +187,7 @@ function extractCoverImage(container?: Element): string | undefined {
   ];
 
   for (const selector of imgSelectors) {
-    const img = root.querySelector(selector) as HTMLImageElement | null;
+    const img = container.querySelector(selector) as HTMLImageElement | null;
     if (img?.src) {
       return normalizeImageUrl(img.src);
     }
@@ -266,21 +200,20 @@ function extractCoverImage(container?: Element): string | undefined {
   ];
 
   for (const selector of bgSelectors) {
-    const el = root.querySelector(selector);
+    const el = container.querySelector(selector);
     const url = extractBackgroundImageUrl(el);
     if (url) {
       return url;
     }
   }
 
-  if (root !== document) {
-    const docCover = extractCoverImage();
-    if (docCover) {
-      return docCover;
-    }
+  const itemImage = container.querySelector('meta[itemprop="image"]');
+  const itemContent = itemImage?.getAttribute('content');
+  if (itemContent) {
+    return normalizeImageUrl(itemContent.replace(/:large$/, ''));
   }
 
-  const ogImage = document.querySelector('meta[property="og:image"]');
+  const ogImage = doc.querySelector('meta[property="og:image"]');
   if (ogImage) {
     const content = ogImage.getAttribute('content');
     if (content) {
@@ -301,132 +234,27 @@ function extractArticleImages(container: Element, coverImage?: string): string[]
       return;
     }
 
-    // Skip obvious avatars or decorative images
-    const isAvatar =
-      src.includes('profile_images') ||
-      src.includes('emoji') ||
-      img.closest('[data-testid="Tweet-User-Avatar"]') !== null;
-
-    if (isAvatar) {
+    if (isAvatarOrDecorativeImage(img as HTMLImageElement)) {
       return;
     }
 
-    if (coverImage && src === coverImage) {
+    const normalized = normalizeImageUrl(src);
+    if (coverImage && (normalized === coverImage || src === coverImage)) {
       return;
     }
 
-    urls.add(src);
+    urls.add(normalized);
   });
 
   return Array.from(urls);
 }
 
-function extractTimestamp(container?: Element): string {
-  const timeElement = (container ?? document).querySelector(
-    ARTICLE_SELECTORS.timestamp
-  ) as HTMLTimeElement | null;
-
-  if (timeElement?.dateTime) {
-    return timeElement.dateTime;
-  }
-
-  const metaPublished = document.querySelector(
-    'meta[property="article:published_time"]'
-  );
-  if (metaPublished) {
-    const content = metaPublished.getAttribute('content');
-    if (content) {
-      return content;
-    }
-  }
-
-  return new Date().toISOString();
-}
-
-function extractAuthor(container?: Element): AuthorData | null {
-  const root: ParentNode = container ?? document;
-  const avatarImg =
-    (root.querySelector('[data-testid="Tweet-User-Avatar"] img') as HTMLImageElement | null) ??
-    (document.querySelector('[data-testid="Tweet-User-Avatar"] img') as HTMLImageElement | null);
-  const avatarUrl = avatarImg?.src || '';
-
-  let handle = '';
-  let displayName = '';
-  let profileUrl = '';
-
-  const userNameContainer =
-    root.querySelector('[data-testid="User-Name"]') ??
-    document.querySelector('[data-testid="User-Name"]');
-
-  if (userNameContainer) {
-    const links = userNameContainer.querySelectorAll('a[role="link"]');
-
-    if (links.length > 0) {
-      const firstLink = links[0] as HTMLAnchorElement;
-      const href = firstLink.href;
-      const match = href.match(/^https:\/\/(x\.com|twitter\.com)\/([a-zA-Z0-9_]{1,15})$/);
-      if (match) {
-        profileUrl = href;
-        const spans = firstLink.querySelectorAll('span');
-        for (const span of spans) {
-          if (span.children.length === 0) {
-            const text = span.textContent?.trim() || '';
-            if (text && !text.startsWith('@')) {
-              displayName = text;
-              break;
-            }
-          }
-        }
-      }
-    }
-
-    const handleLink = userNameContainer.querySelector('a[tabindex="-1"]') as HTMLAnchorElement | null;
-    if (handleLink) {
-      const handleSpan = handleLink.querySelector('span');
-      const text = handleSpan?.textContent?.trim() || '';
-      if (text.startsWith('@')) {
-        handle = text;
-      }
-    }
-
-    if (!handle && profileUrl) {
-      const match = profileUrl.match(/^https:\/\/(x\.com|twitter\.com)\/([a-zA-Z0-9_]{1,15})$/);
-      if (match) {
-        handle = `@${match[2]}`;
-      }
-    }
-  }
-
-  if (!handle) {
-    const metaAuthor = document.querySelector('meta[name="author"]');
-    const authorName = metaAuthor?.getAttribute('content')?.trim();
-    if (authorName) {
-      displayName = authorName;
-    }
-  }
-
-  if (!handle && profileUrl) {
-    handle = `@${profileUrl.split('/').pop()}`;
-  }
-
-  if (!handle) {
-    return null;
-  }
-
-  return {
-    displayName: displayName || handle.substring(1),
-    handle,
-    avatarUrl,
-    profileUrl,
-  };
-}
-
-function extractFromMeta(articleId: string, url: string): ArticleData {
-  const metaTitle = document.querySelector('meta[property="og:title"]');
-  const metaDesc = document.querySelector('meta[name="description"]') ?? document.querySelector('meta[property="og:description"]');
-  const metaImage = document.querySelector('meta[property="og:image"]');
-  const metaPublished = document.querySelector('meta[property="article:published_time"]');
-  const metaAuthor = document.querySelector('meta[name="author"]');
+function extractFromMeta(articleId: string, url: string, doc: Document): ArticleData {
+  const metaTitle = doc.querySelector('meta[property="og:title"]');
+  const metaDesc = doc.querySelector('meta[name="description"]') ?? doc.querySelector('meta[property="og:description"]');
+  const metaImage = doc.querySelector('meta[property="og:image"]');
+  const metaPublished = doc.querySelector('meta[property="article:published_time"]');
+  const metaAuthor = doc.querySelector('meta[name="author"]');
 
   const authorName = metaAuthor?.getAttribute('content') || '';
 
@@ -434,8 +262,8 @@ function extractFromMeta(articleId: string, url: string): ArticleData {
     type: 'article',
     articleId,
     url,
-    title: metaTitle?.getAttribute('content') || '',
-    content: metaDesc?.getAttribute('content') || '',
+    title: metaDesc?.getAttribute('content') || metaTitle?.getAttribute('content') || '',
+    content: '',
     coverImage: metaImage?.getAttribute('content') || undefined,
     images: [],
     author: {
@@ -444,28 +272,40 @@ function extractFromMeta(articleId: string, url: string): ArticleData {
       avatarUrl: '',
       profileUrl: '',
     },
-    createdAt: metaPublished?.getAttribute('content') || new Date().toISOString(),
+    createdAt: metaPublished?.getAttribute('content') || '',
   };
 }
 
 /**
  * Extracts article data with detailed error information
  */
-export function extractArticleDataWithDetails(): ExtractionResult<ArticleData> {
+export function extractArticleDataWithDetails(
+  ctx?: ExtractionContext
+): ExtractionResult<ArticleData> {
   const missingFields: string[] = [];
+  const doc = resolveDocument(ctx);
+  const currentUrl = resolveUrl(ctx);
 
   try {
-    const currentUrl = window.location.href;
-    const articleId = extractArticleId(currentUrl) ?? findArticleIdFromDom();
-    const container = findArticleContainer();
-    const hasArticleDom = Boolean(container);
-    const canonicalUrl = isArticlePage(currentUrl)
-      ? currentUrl
-      : articleId
-        ? `https://x.com/i/article/${articleId}`
-        : currentUrl;
+    const container = findArticleRoot(doc, currentUrl);
+    const articleDomPresent = Boolean(container) || hasArticleDom(doc);
+    const urlArticleId = extractArticleId(currentUrl);
+    const domArticleId =
+      (container ? findArticleIdInDom(container) : null) ?? findArticleIdInDom(doc);
+    const postId = extractPostId(currentUrl);
+    const articleId = urlArticleId ?? domArticleId ?? (articleDomPresent ? postId : null);
 
-    if (!articleId || (!isArticlePage(currentUrl) && !hasArticleDom)) {
+    const canonicalUrl = currentUrl;
+
+    if (!articleDomPresent && !isArticlePage(currentUrl)) {
+      return {
+        success: false,
+        error: createError(ErrorCode.INVALID_URL, 'Could not extract article ID from page'),
+        contentType: 'article',
+      };
+    }
+
+    if (!articleId) {
       return {
         success: false,
         error: createError(ErrorCode.INVALID_URL, 'Could not extract article ID from page'),
@@ -474,12 +314,12 @@ export function extractArticleDataWithDetails(): ExtractionResult<ArticleData> {
     }
 
     if (container) {
-      const title = extractTitle(container);
+      const title = extractTitle(container, doc);
       const content = extractContent(container);
-      const coverImage = extractCoverImage(container);
+      const coverImage = extractCoverImage(container, doc);
       const images = extractArticleImages(container, coverImage);
-      const author = extractAuthor(container);
-      const createdAt = extractTimestamp(container);
+      const author = extractAuthorFromContainer(container, doc);
+      const createdAt = extractTimestampFromContainer(container, doc);
 
       if (!title) {
         missingFields.push('article title');
@@ -491,7 +331,7 @@ export function extractArticleDataWithDetails(): ExtractionResult<ArticleData> {
         missingFields.push('article author');
       }
 
-      if (author) {
+      if (author && content) {
         const articleData: ArticleData = {
           type: 'article',
           articleId,
@@ -511,11 +351,15 @@ export function extractArticleDataWithDetails(): ExtractionResult<ArticleData> {
           contentType: 'article',
         };
       }
+
+      if (author && !content) {
+        missingFields.push('article content');
+      }
     } else {
       missingFields.push('article container');
     }
 
-    const metaData = extractFromMeta(articleId, canonicalUrl);
+    const metaData = extractFromMeta(articleId, canonicalUrl, doc);
     if (metaData.title || metaData.content) {
       if (!metaData.author.displayName) {
         missingFields.push('article author');
@@ -565,7 +409,7 @@ export function extractArticleDataWithDetails(): ExtractionResult<ArticleData> {
 /**
  * Extracts article data or null on failure
  */
-export function extractArticleData(): ArticleData | null {
-  const result = extractArticleDataWithDetails();
+export function extractArticleData(ctx?: ExtractionContext): ArticleData | null {
+  const result = extractArticleDataWithDetails(ctx);
   return result.success ? result.data ?? null : null;
 }
